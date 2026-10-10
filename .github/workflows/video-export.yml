@@ -9,8 +9,8 @@ jobs:
         with:
           node-version: 24
       - run: corepack enable
-      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm@10.15.1 install --frozen-lockfile
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - run: corepack pnpm test:video-export
-      - run: corepack pnpm test:grok-video
-      - run: corepack pnpm exec tsc --noEmit
+      - run: corepack pnpm@10.15.1 test:video-export
+      - run: corepack pnpm@10.15.1 test:grok-video
+      - run: corepack pnpm@10.15.1 exec tsc --noEmit
