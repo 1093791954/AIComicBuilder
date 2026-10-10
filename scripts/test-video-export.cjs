@@ -46,6 +46,13 @@ test('export options and real media', async t => {
     const on=await run('cut',true,[clips[0],clips[2]]); assert.match(fs.readFileSync(on.srtPath,'utf8'),/00:00:01,199|00:00:01,200/);
     assert.ok(probe(on.videoPath).streams.some(s=>s.codec_type==='audio'));
   });
+  await t.test('hard cut normalizes silent/different-size clips', async () => {
+    const result=await run('cut'); const data=probe(result.videoPath);
+    assert.ok(data.streams.some(s=>s.codec_type==='audio'));
+    assert.equal(data.streams.find(s=>s.codec_type==='video').width,160);
+    assert.ok(Math.abs(Number(data.format.duration)-3.6)<0.25,data.format.duration);
+    execFileSync(ff,['-v','error','-i',path.resolve(result.videoPath),'-f','null','-'],{stdio:'pipe'});
+  });
   for(const transition of options.TRANSITIONS.filter(v=>v!=='cut')) await t.test('real transition '+transition+' preserves audio and handles silent/different-size clip',async () => {
     const result=await run(transition); const data=probe(result.videoPath);
     assert.ok(data.streams.some(s=>s.codec_type==='audio'));
@@ -67,16 +74,19 @@ test('export options and real media', async t => {
   });
   await t.test('ZIP entries retain original bytes and reject missing/outside files', async () => {
     const response=await createVideoArchive(clips.map((source,i)=>({sequence:i+1,source})),'test');
-    const zip=Buffer.from(await response.arrayBuffer()); let cursor=0; let count=0;
-    while(zip.readUInt32LE(cursor)===0x04034b50) {
-      const size=zip.readUInt32LE(cursor+18), nameLen=zip.readUInt16LE(cursor+26), extra=zip.readUInt16LE(cursor+28);
-      const name=zip.subarray(cursor+30,cursor+30+nameLen).toString(); assert.equal(name,'shot-00'+(count+1)+'.mp4');
-      const start=cursor+30+nameLen+extra;
-      // archiver uses a data descriptor: verify via central directory below.
-      count++; break;
+    const zip=Buffer.from(await response.arrayBuffer());
+    const end=zip.lastIndexOf(Buffer.from([0x50,0x4b,0x05,0x06]));
+    const count=zip.readUInt16LE(end+10); assert.equal(count,clips.length);
+    let cursor=zip.readUInt32LE(end+16);
+    for(let i=0;i<count;i++) {
+      assert.equal(zip.readUInt32LE(cursor),0x02014b50);
+      assert.equal(zip.readUInt16LE(cursor+10),0);
+      const size=zip.readUInt32LE(cursor+24), nameLen=zip.readUInt16LE(cursor+28), extra=zip.readUInt16LE(cursor+30), comment=zip.readUInt16LE(cursor+32), offset=zip.readUInt32LE(cursor+42);
+      assert.equal(zip.subarray(cursor+46,cursor+46+nameLen).toString(),'shot-00'+(i+1)+'.mp4');
+      const start=offset+30+zip.readUInt16LE(offset+26)+zip.readUInt16LE(offset+28);
+      assert.deepEqual(zip.subarray(start,start+size),fs.readFileSync(clips[i]));
+      cursor+=46+nameLen+extra+comment;
     }
-    assert.equal(count,1); assert.ok(zip.includes(Buffer.from('shot-003.mp4')));
-    for(const clip of clips) assert.ok(zip.includes(fs.readFileSync(clip)));
     await assert.rejects(createVideoArchive([{sequence:1}],'missing'));
     await assert.rejects(createVideoArchive([{sequence:1,source:path.join(root,'package.json')}],'outside'));
   });

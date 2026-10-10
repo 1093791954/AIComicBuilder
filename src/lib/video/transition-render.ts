@@ -6,18 +6,20 @@ import { transitionOverlap, type TransitionType } from "./export-options";
 export function runFfmpeg(command: ReturnType<typeof ffmpeg>): Promise<void> {
   return new Promise((resolve, reject) => command.on("end", () => resolve()).on("error", err => reject(new Error("FFmpeg assembly failed: " + err.message))).run());
 }
-export async function probeVideo(file: string): Promise<{ duration: number; width: number; height: number; audio: boolean }> {
+export async function probeVideo(file: string): Promise<{ duration: number; width: number; height: number; audio: boolean; signature: string }> {
   return new Promise((resolve, reject) => ffmpeg.ffprobe(path.resolve(file), (error, data) => {
     if (error) { reject(error); return; }
     const video = data.streams.find(s => s.codec_type === "video");
     const duration = Number(video?.duration ?? data.format.duration);
     if (!video?.width || !video.height || !Number.isFinite(duration) || duration <= 0) { reject(new Error("Invalid video clip: " + file)); return; }
-    resolve({ duration, width: video.width, height: video.height, audio: data.streams.some(s => s.codec_type === "audio") });
+    const signature = JSON.stringify(data.streams.filter(s => s.codec_type === "video" || s.codec_type === "audio").map(s => [s.codec_type, s.codec_name, s.profile, s.codec_tag_string, s.width, s.height, s.pix_fmt, s.sample_aspect_ratio, s.r_frame_rate, s.time_base, s.sample_rate, s.channels, s.channel_layout]));
+    resolve({ duration, width: video.width, height: video.height, audio: data.streams.some(s => s.codec_type === "audio"), signature });
   }));
 }
 export async function renderTransitions(videoPaths: string[], transitions: TransitionType[], durations: number[], outputPath: string) {
   if (videoPaths.length === 1) { fs.copyFileSync(path.resolve(videoPaths[0]), outputPath); return; }
-  if (transitions.every(t => t === "cut")) {
+  const info = await Promise.all(videoPaths.map(probeVideo));
+  if (transitions.every(t => t === "cut") && info.every(clip => clip.signature === info[0].signature)) {
     const list = outputPath + ".txt";
     fs.writeFileSync(list, videoPaths.map(p => "file '" + path.resolve(p).split(path.sep).join("/").replace(/'/g, "'\\'") + "'").join("\n"));
     try { await runFfmpeg(ffmpeg().input(list).inputOptions(["-f", "concat", "-safe", "0"]).outputOptions(["-c", "copy"]).output(outputPath)); }
@@ -25,7 +27,6 @@ export async function renderTransitions(videoPaths: string[], transitions: Trans
     return;
   }
   // Decode at most two short source spans at once instead of 31 full videos.
-  const info = await Promise.all(videoPaths.map(probeVideo));
   const width = Math.floor(info[0].width / 2) * 2;
   const height = Math.floor(info[0].height / 2) * 2;
   const overlaps = transitions.map((t, i) => transitionOverlap(t, durations[i], durations[i + 1]));
