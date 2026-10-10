@@ -1,0 +1,83 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const Module = require('node:module');
+const ts = require('typescript');
+const { execFileSync } = require('node:child_process');
+const root = path.resolve(__dirname, '..');
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'export-test-'));
+process.env.UPLOAD_DIR = tmp;
+const ff = process.env.FFMPEG_PATH || 'ffmpeg';
+const fp = process.env.FFPROBE_PATH || 'ffprobe';
+const cache = new Map();
+function load(file) {
+  if (cache.has(file)) return cache.get(file).exports;
+  const full = path.join(root, file);
+  const m = new Module(full, module); m.filename = full; m.paths = module.paths; cache.set(file, m);
+  m.require = id => id === '@/lib/id' ? { id: () => require('node:crypto').randomUUID() } : id.startsWith('./') ? load(path.join(path.dirname(file), id + '.ts')) : require(id);
+  m._compile(ts.transpileModule(fs.readFileSync(full, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, full);
+  return m.exports;
+}
+const options = load('src/lib/video/export-options.ts');
+const { assembleVideo } = load('src/lib/video/ffmpeg.ts');
+const { createVideoArchive } = load('src/lib/video/clip-archive.ts');
+const probe = f => JSON.parse(execFileSync(fp, ['-v','error','-show_streams','-show_format','-of','json',path.resolve(f)], { encoding:'utf8' }));
+test('export options and real media', async t => {
+  t.after(() => fs.rmSync(tmp,{recursive:true,force:true}));
+  await t.test('defaults and validation', () => {
+    assert.deepEqual(options.parseExportOptions(),{subtitlesEnabled:true,transition:'shot',mode:undefined});
+    assert.throws(() => options.parseExportOptions({transition:'evil'}));
+    assert.throws(() => options.parseExportOptions({subtitlesEnabled:'false'}));
+    assert.throws(() => options.parseExportOptions({mode:'both'}));
+  });
+  const clips = ['red','blue','green'].map((color,i) => {
+    const output=path.join(tmp,'clip-'+i+'.mp4');
+    const args=['-y','-f','lavfi','-i','color=c='+color+':s='+(i===1?'96x96':'160x90')+':r=30:d=1.2'];
+    if(i!==1) args.push('-f','lavfi','-i','sine=frequency='+ (440+i*220) +':duration=1.2','-c:a','aac');
+    args.push('-c:v','libx264','-pix_fmt','yuv420p',output);
+    execFileSync(ff,args,{stdio:'ignore'}); return output;
+  });
+  const subtitles=[{text:'Hello',shotSequence:2,dialogueSequence:0,dialogueCount:1}];
+  const run = (transition,enabled=false,paths=clips) => assembleVideo({videoPaths:paths,subtitles,projectId:'test',shotDurations:paths.map(()=>99),transitions:paths.slice(1).map(()=>transition),subtitlesEnabled:enabled});
+  await t.test('subtitle on creates SRT at actual media time; off does not', async () => {
+    const off=await run('cut',false,[clips[0],clips[2]]); assert.equal(off.srtPath,undefined);
+    const on=await run('cut',true,[clips[0],clips[2]]); assert.match(fs.readFileSync(on.srtPath,'utf8'),/00:00:01,199|00:00:01,200/);
+    assert.ok(probe(on.videoPath).streams.some(s=>s.codec_type==='audio'));
+  });
+  for(const transition of options.TRANSITIONS.filter(v=>v!=='cut')) await t.test('real transition '+transition+' preserves audio and handles silent/different-size clip',async () => {
+    const result=await run(transition); const data=probe(result.videoPath);
+    assert.ok(data.streams.some(s=>s.codec_type==='audio'));
+    assert.ok(Math.abs(Number(data.format.duration)-2.8)<0.25, data.format.duration);
+    execFileSync(ff,['-v','error','-i',path.resolve(result.videoPath),'-f','null','-'],{stdio:'pipe'});
+  });
+  await t.test('31 clips mixed transitions preserve timing and audio', async () => {
+    const paths=Array.from({length:31},(_,i)=>clips[i%3]);
+    const transitions=paths.slice(1).map((_,i)=>i%2?'fade':'cut');
+    const result=await assembleVideo({videoPaths:paths,subtitles:[],projectId:'stress',shotDurations:paths.map(()=>99),transitions,subtitlesEnabled:false});
+    const data=probe(result.videoPath);
+    assert.ok(data.streams.some(s=>s.codec_type==='audio'));
+    assert.ok(Math.abs(Number(data.format.duration)-(31*1.2-15*0.4))<1.5,data.format.duration);
+    execFileSync(ff,['-v','error','-i',path.resolve(result.videoPath),'-f','null','-'],{stdio:'pipe'});
+  });
+  await t.test('single clip and missing clip', async () => {
+    const result=await run('cut',false,[clips[0]]); assert.ok(probe(result.videoPath));
+    await assert.rejects(run('cut',false,[path.join(tmp,'missing.mp4')]));
+  });
+  await t.test('ZIP entries retain original bytes and reject missing/outside files', async () => {
+    const response=await createVideoArchive(clips.map((source,i)=>({sequence:i+1,source})),'test');
+    const zip=Buffer.from(await response.arrayBuffer()); let cursor=0; let count=0;
+    while(zip.readUInt32LE(cursor)===0x04034b50) {
+      const size=zip.readUInt32LE(cursor+18), nameLen=zip.readUInt16LE(cursor+26), extra=zip.readUInt16LE(cursor+28);
+      const name=zip.subarray(cursor+30,cursor+30+nameLen).toString(); assert.equal(name,'shot-00'+(count+1)+'.mp4');
+      const start=cursor+30+nameLen+extra;
+      // archiver uses a data descriptor: verify via central directory below.
+      count++; break;
+    }
+    assert.equal(count,1); assert.ok(zip.includes(Buffer.from('shot-003.mp4')));
+    for(const clip of clips) assert.ok(zip.includes(fs.readFileSync(clip)));
+    await assert.rejects(createVideoArchive([{sequence:1}],'missing'));
+    await assert.rejects(createVideoArchive([{sequence:1,source:path.join(root,'package.json')}],'outside'));
+  });
+});

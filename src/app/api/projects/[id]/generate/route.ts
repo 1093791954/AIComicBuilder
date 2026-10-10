@@ -49,6 +49,7 @@ import { resolveImageProvider, resolveVideoProvider, resolveAIProvider } from "@
 import { buildVideoPrompt, buildReferenceVideoPrompt } from "@/lib/ai/prompts/video-generate";
 import { buildRefVideoPromptRequest } from "@/lib/ai/prompts/ref-video-prompt-generate";
 import { buildCharacterTurnaroundPrompt } from "@/lib/ai/prompts/character-image";
+import { parseExportOptions, type TransitionType } from "@/lib/video/export-options";
 import { assembleVideo } from "@/lib/video/ffmpeg";
 import { parseRefImages, serializeRefImages, appendToHistory, type RefImage } from "@/lib/ref-image-utils";
 import {
@@ -2636,6 +2637,8 @@ async function handleBatchReferenceVideo(
 // --- video_assemble: synchronous ffmpeg concat + subtitle burn ---
 
 async function handleVideoAssembleSync(projectId: string, payload?: Record<string, unknown>, episodeId?: string) {
+  let exportOptions: ReturnType<typeof parseExportOptions>;
+  try { exportOptions = parseExportOptions(payload); } catch (err) { return NextResponse.json({ error: extractErrorMessage(err) }, { status: 400 }); }
   let generationModeValue: string = "keyframe";
   if (episodeId) {
     const [episode] = await db.select({ generationMode: episodes.generationMode }).from(episodes).where(eq(episodes.id, episodeId));
@@ -2670,7 +2673,7 @@ async function handleVideoAssembleSync(projectId: string, payload?: Record<strin
     .where(and(...shotWhereConditions))
     .orderBy(asc(shots.sequence));
 
-  const isReference = generationModeValue === "reference";
+  const isReference = (exportOptions.mode ?? generationModeValue) === "reference";
   const projectShotsLegacy = await loadShotLegacyViewsBatch(projectShots.map((s) => s.id));
   const videoPaths = projectShots
     .map((s) => {
@@ -2684,13 +2687,14 @@ async function handleVideoAssembleSync(projectId: string, payload?: Record<strin
   }
 
   // Build transitions array from shot transitionOut / transitionIn fields
-  type TransitionType = "cut" | "dissolve" | "fade_in" | "fade_out" | "wipeleft" | "slideright" | "circleopen";
   const completedShots = projectShots.filter((s) => {
     const v = projectShotsLegacy.get(s.id);
     return isReference ? v?.referenceVideoUrl : v?.videoUrl;
   });
+  const transitionOverride = exportOptions.transition === "shot" ? undefined : exportOptions.transition;
   const transitions: TransitionType[] = completedShots.slice(0, -1).map((shot, i) => {
     const nextShot = completedShots[i + 1];
+    if (transitionOverride) return transitionOverride;
     return ((shot.transitionOut && shot.transitionOut !== "cut")
       ? shot.transitionOut
       : (nextShot?.transitionIn || "cut")) as TransitionType;
@@ -2727,7 +2731,7 @@ async function handleVideoAssembleSync(projectId: string, payload?: Record<strin
       const er = d.endRatio ? parseFloat(String(d.endRatio)) : undefined;
       allSubtitles.push({
         text: `${d.characterName}: ${d.text}`,
-        shotSequence: d.shotSequence,
+        shotSequence: completedShots.findIndex(s => s.id === shot.id) + 1,
         dialogueSequence: idx,
         dialogueCount: count,
         startRatio: sr,
@@ -2743,6 +2747,7 @@ async function handleVideoAssembleSync(projectId: string, payload?: Record<strin
       projectId,
       shotDurations: completedShots.map((s) => s.duration ?? 10),
       transitions,
+      subtitlesEnabled: exportOptions.subtitlesEnabled,
     });
 
     if (episodeId) {

@@ -96,7 +96,26 @@
     "kanbanBatchGenerate": "批量生成 ({count})",
     "continueFromPrev": "续上集",
     "continueFromPrevTooltip": "使用上一集最后一帧作为本集首帧",
-    "prevEpisodeNoFrames": "上一集尚未生成帧，无法续接"
+    "prevEpisodeNoFrames": "上一集尚未生成帧，无法续接",
+    "addSubtitles": "添加字幕",
+    "exportTransition": "分镜间转场",
+    "transitionShot": "沿用分镜设置",
+    "downloadClips": "下载 {count} 个分镜（ZIP）",
+    "exportHint": "仅影响重新合成；分镜 ZIP 保留原视频，便于自行剪辑。",
+    "exportTransitions": {
+      "cut": "硬切（无转场）",
+      "fade": "淡化",
+      "dissolve": "溶解",
+      "fadeblack": "淡入淡出到黑色",
+      "fadewhite": "淡入淡出到白色",
+      "wipeleft": "向左擦除",
+      "wiperight": "向右擦除",
+      "slideleft": "向左滑动",
+      "slideright": "向右滑动",
+      "circleopen": "圆形展开",
+      "circleclose": "圆形收拢",
+      "pixelize": "像素化"
+    }
   },
   "character": {
     "name": "角色名",
@@ -168,9 +187,8 @@
     "refImagePrompt": "参考图提示词...",
     "noRefImages": "暂无参考图提示词",
     "noKeyframes": "暂无首尾帧提示词",
-    "refChars": "镜头角色",
-    "generateRefImages": "生成参考图",
     "refChars": "角色",
+    "generateRefImages": "生成参考图",
     "regenerateRefImages": "重新生成参考图",
     "maxRefImages": "最多9张参考图",
     "transition": "转场",

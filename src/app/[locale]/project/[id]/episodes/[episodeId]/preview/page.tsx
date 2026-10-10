@@ -24,21 +24,25 @@ import {
 import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api-fetch";
 import { toast } from "sonner";
+import { TRANSITIONS } from "@/lib/video/export-options";
 
 export default function EpisodePreviewPage() {
   const t = useTranslations();
   const { project, fetchProject } = useProjectStore();
   const searchParams = useSearchParams();
-  const params = useParams<{ id: string }>();
+  const params = useParams<{ id: string; episodeId: string }>();
   const versionId = searchParams.get("versionId");
 
   useEffect(() => {
     if (versionId && params?.id) {
-      fetchProject(params.id, undefined, versionId);
+      fetchProject(params.id, params.episodeId, versionId);
     }
-  }, [versionId, params?.id, fetchProject]);
+  }, [versionId, params?.id, params?.episodeId, fetchProject]);
 
   const [assembling, setAssembling] = useState(false);
+  const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
+  const [transition, setTransition] = useState("shot");
+  const [downloading, setDownloading] = useState(false);
   const [selectedShot, setSelectedShot] = useState(0);
   const [videoValid, setVideoValid] = useState<boolean | null>(null);
   const checkedUrl = useRef<string | null>(null);
@@ -90,15 +94,15 @@ export default function EpisodePreviewPage() {
       const res = await apiFetch(`/api/projects/${project.id}/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "video_assemble", payload: versionId ? { versionId } : undefined, episodeId: useProjectStore.getState().currentEpisodeId }),
+        body: JSON.stringify({ action: "video_assemble", payload: { versionId: versionId || undefined, subtitlesEnabled, transition, mode: previewMode }, episodeId: params.episodeId }),
       });
       await res.json();
     } catch (err) {
       console.error("Video assemble error:", err);
-      toast.error(t("common.generationFailed"));
+      toast.error(err instanceof Error ? err.message : t("common.generationFailed"));
     }
     setAssembling(false);
-    await fetchProject(project.id, useProjectStore.getState().currentEpisodeId!);
+    await fetchProject(project.id, params.episodeId, versionId || undefined);
   }
 
   function handleDownload() {
@@ -107,6 +111,24 @@ export default function EpisodePreviewPage() {
     a.href = uploadUrl(finalVideoUrl!);
     a.download = `${project!.title || "video"}-final.mp4`;
     a.click();
+  }
+
+  async function handleDownloadClips() {
+    if (!project) return;
+    setDownloading(true);
+    try {
+      const query = new URLSearchParams({ mode: previewMode });
+      if (versionId) query.set("versionId", versionId);
+      const response = await apiFetch(`/api/projects/${project.id}/episodes/${params.episodeId}/download-videos?${query}`);
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${project.title || "video"}-clips.zip`;
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("common.generationFailed"));
+    } finally { setDownloading(false); }
   }
 
   function handleModeSwitch(mode: "keyframe" | "reference") {
@@ -134,7 +156,11 @@ export default function EpisodePreviewPage() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={handleDownloadClips} disabled={downloading || !allShotsHaveVideo} size="sm" variant="outline">
+            <Download className="h-3.5 w-3.5" />
+            {downloading ? t("common.generating") : t("project.downloadClips", { count: completedVideos })}
+          </Button>
           {hasValidVideo && (
             <Button onClick={handleDownload} size="sm" variant="outline" className="border-emerald-300 text-emerald-700 hover:bg-emerald-100">
               <Download className="h-3.5 w-3.5" />
@@ -154,6 +180,21 @@ export default function EpisodePreviewPage() {
             {assembling ? t("common.generating") : t("project.assembleVideo")}
           </Button>
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-5 rounded-xl border border-[--border-subtle] bg-white p-4">
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={subtitlesEnabled} disabled={assembling} onChange={event => setSubtitlesEnabled(event.target.checked)} />
+          {t("project.addSubtitles")}
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          {t("project.exportTransition")}
+          <select className="rounded-lg border p-2" value={transition} disabled={assembling} onChange={event => setTransition(event.target.value)}>
+            <option value="shot">{t("project.transitionShot")}</option>
+            {TRANSITIONS.map(value => <option key={value} value={value}>{t(`project.exportTransitions.${value}`)}</option>)}
+          </select>
+        </label>
+        <p className="text-xs text-[--text-muted]">{t("project.exportHint")}</p>
       </div>
 
       {/* Mode switcher — only shown when both modes have videos */}

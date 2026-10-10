@@ -1,0 +1,16 @@
+name: Video export tests
+on: [push, pull_request]
+jobs:
+  video-export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: corepack pnpm test:video-export
+      - run: corepack pnpm test:grok-video
+      - run: corepack pnpm exec tsc --noEmit
