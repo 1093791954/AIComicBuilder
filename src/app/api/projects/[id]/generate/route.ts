@@ -30,6 +30,7 @@ async function callAndValidateAgent(
 import { eq, asc, and, lt, gt, desc, or, isNull, inArray } from "drizzle-orm";
 import { getUserIdFromRequest } from "@/lib/get-user-id";
 import path from "path";
+import { writeExportSettings } from "@/lib/video/export-metadata";
 import { id as genId } from "@/lib/id";
 import { enqueueTask } from "@/lib/task-queue";
 import type { TaskType } from "@/lib/task-queue";
@@ -2749,6 +2750,7 @@ async function handleVideoAssembleSync(projectId: string, payload?: Record<strin
       transitions,
       subtitlesEnabled: exportOptions.subtitlesEnabled,
     });
+    writeExportSettings(result.videoPath, { subtitlesEnabled: exportOptions.subtitlesEnabled, transition: exportOptions.transition, mode: generationModeValue === "reference" ? "reference" : "keyframe", versionId: typeof payload?.versionId === "string" ? payload.versionId : undefined });
 
     if (episodeId) {
       await db

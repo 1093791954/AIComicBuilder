@@ -23,6 +23,22 @@ function load(file) {
 const options = load('src/lib/video/export-options.ts');
 const { assembleVideo } = load('src/lib/video/ffmpeg.ts');
 const { createVideoArchive } = load('src/lib/video/clip-archive.ts');
+const { confirmPreview } = load('src/lib/video/preview-update.ts');
+const { readExportSettings, writeExportSettings } = load('src/lib/video/export-metadata.ts');
+test('export metadata is tied to the rendered file and rejects malformed options', () => {
+  const file=path.join(tmp,'metadata.mp4'), settings={subtitlesEnabled:false,transition:'cut',mode:'keyframe',versionId:'v2'};
+  assert.equal(readExportSettings(file),null);
+  writeExportSettings(file,settings); assert.deepEqual(readExportSettings(file),settings);
+  fs.writeFileSync(file+'.export.json','{"transition":"invalid"}'); assert.equal(readExportSettings(file),null);
+});
+test('preview confirmation only publishes verified media and captured settings', async () => {
+  const settings={subtitlesEnabled:false,transition:'cut',mode:'keyframe',versionId:'v2'};
+  const result=await confirmPreview(settings,async input=>{ assert.deepEqual(input,settings); input.transition='fade'; return {status:'ok',outputPath:'new.mp4'}; },async file=>file==='new.mp4');
+  assert.deepEqual(result,{outputPath:'new.mp4',settings});
+  await assert.rejects(confirmPreview(settings,async()=>{throw Error('render failed');},async()=>true),/render failed/);
+  await assert.rejects(confirmPreview(settings,async()=>({status:'error'}),async()=>true),/Invalid assembly response/);
+  await assert.rejects(confirmPreview(settings,async()=>({status:'ok',outputPath:'missing.mp4'}),async()=>false),/unavailable/);
+});
 const probe = f => JSON.parse(execFileSync(fp, ['-v','error','-show_streams','-show_format','-of','json',path.resolve(f)], { encoding:'utf8' }));
 test('export options and real media', async t => {
   t.after(() => fs.rmSync(tmp,{recursive:true,force:true}));

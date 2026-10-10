@@ -100,7 +100,11 @@
     "exportTransition": "Between-shot transition",
     "transitionShot": "Use shot settings",
     "downloadClips": "Download {count} clips (ZIP)",
-    "exportHint": "Applies to reassembly only. ZIP preserves original clips for editing.",
+    "exportHint": "Confirm to rebuild the preview below. ZIP preserves original clips, including existing text and effects.",
+    "confirmPreview": "Confirm settings and update preview",
+    "previewUpdating": "Updating preview with current settings…",
+    "previewPending": "Settings changed. Confirm settings and update preview to see the new result.",
+    "previewUpdated": "Preview updated with current settings",
     "exportTransitions": {
       "cut": "Hard cut (none)",
       "fade": "Fade",
